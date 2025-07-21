@@ -1,8 +1,13 @@
-"use client";
+'use client';
+
 import React from 'react';
-import { Provider } from 'react-redux';
-import { store } from './store';
- 
-export function ReduxProvider({ children }: { children: React.ReactNode }) {
-  return <Provider store={store}>{children}</Provider>;
-} 
+
+interface ReduxProviderProps {
+  children: React.ReactNode;
+}
+
+// Simple provider component that just passes through children
+// We're using Zustand for state management instead of Redux
+export const ReduxProvider: React.FC<ReduxProviderProps> = ({ children }) => {
+  return <>{children}</>;
+}; 
