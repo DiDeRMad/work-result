@@ -1,0 +1,265 @@
+version: '3.9'
+
+services:
+  # PostgreSQL для основной базы данных
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: epic_mmorpg
+      POSTGRES_USER: gameadmin
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-gamepass123}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - game-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gameadmin -d epic_mmorpg"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis для кеширования и сессий
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-redispass123}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - game-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # MongoDB для логов и аналитики
+  mongodb:
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongoadmin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-mongopass123}
+      MONGO_INITDB_DATABASE: game_analytics
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - game-network
+
+  # RabbitMQ для обмена сообщениями между сервисами
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: gamequeue
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rabbitpass123}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - game-network
+
+  # MinIO для хранения файлов (ассеты, сохранения)
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-miniopass123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - game-network
+
+  # Основной игровой сервер
+  game-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_started
+      mongodb:
+        condition: service_started
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: epic_mmorpg
+      DB_USER: gameadmin
+      DB_PASSWORD: ${DB_PASSWORD:-gamepass123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass123}
+      MONGO_URI: mongodb://mongoadmin:${MONGO_PASSWORD:-mongopass123}@mongodb:27017/game_analytics?authSource=admin
+      RABBITMQ_URL: amqp://gamequeue:${RABBITMQ_PASSWORD:-rabbitpass123}@rabbitmq:5672
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: ${MINIO_PASSWORD:-miniopass123}
+      JWT_SECRET: ${JWT_SECRET:-supersecretjwt123}
+      GAME_SERVER_PORT: 3000
+      WEBSOCKET_PORT: 3001
+    ports:
+      - "3000:3000"
+      - "3001:3001"
+    volumes:
+      - ./server/logs:/app/logs
+    networks:
+      - game-network
+    restart: unless-stopped
+
+  # Auth сервис
+  auth-service:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.auth
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: auth
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: epic_mmorpg
+      DB_USER: gameadmin
+      DB_PASSWORD: ${DB_PASSWORD:-gamepass123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass123}
+      RABBITMQ_URL: amqp://gamequeue:${RABBITMQ_PASSWORD:-rabbitpass123}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET:-supersecretjwt123}
+      PORT: 3002
+    ports:
+      - "3002:3002"
+    networks:
+      - game-network
+    restart: unless-stopped
+
+  # World сервис (управление игровым миром)
+  world-service:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.world
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: world
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: epic_mmorpg
+      DB_USER: gameadmin
+      DB_PASSWORD: ${DB_PASSWORD:-gamepass123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass123}
+      RABBITMQ_URL: amqp://gamequeue:${RABBITMQ_PASSWORD:-rabbitpass123}@rabbitmq:5672
+      PORT: 3003
+    ports:
+      - "3003:3003"
+    networks:
+      - game-network
+    restart: unless-stopped
+
+  # Combat сервис (боевая система)
+  combat-service:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.combat
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: combat
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: epic_mmorpg
+      DB_USER: gameadmin
+      DB_PASSWORD: ${DB_PASSWORD:-gamepass123}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispass123}
+      RABBITMQ_URL: amqp://gamequeue:${RABBITMQ_PASSWORD:-rabbitpass123}@rabbitmq:5672
+      PORT: 3004
+    ports:
+      - "3004:3004"
+    networks:
+      - game-network
+    restart: unless-stopped
+
+  # Nginx для балансировки нагрузки
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./client/dist:/usr/share/nginx/html
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - game-server
+      - auth-service
+      - world-service
+      - combat-service
+    networks:
+      - game-network
+
+  # Prometheus для мониторинга
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - game-network
+
+  # Grafana для визуализации метрик
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-grafanapass123}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+    ports:
+      - "3005:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - game-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  mongo_data:
+  rabbitmq_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  game-network:
+    driver: bridge
