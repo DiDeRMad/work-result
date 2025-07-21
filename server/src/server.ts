@@ -24,19 +24,34 @@ const wss = new WebSocketServer({ server: httpServer });
 // Serve static client files
 app.use(express.static(path.join(__dirname, '../../client')));
 
-const players: Map<string, Player> = new Map();
+// Map roomId -> Map<playerId, Player>
+const rooms: Map<string, Map<string, Player>> = new Map();
 
-function broadcastState() {
-  const state = Array.from(players.values());
-  const payload = JSON.stringify({ type: 'state', players: state });
-  wss.clients.forEach((client) => {
-    if (client.readyState === 1) {
-      client.send(payload);
-    }
+function broadcastStates() {
+  rooms.forEach((players, roomId) => {
+    const state = Array.from(players.values());
+    const payload = JSON.stringify({ type: 'state', players: state });
+    wss.clients.forEach((client: any) => {
+      if (client.readyState === 1 && client.roomId === roomId) {
+        client.send(payload);
+      }
+    });
   });
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  // Определяем комнату из query-параметра ?room=<id>
+  const url = new URL(req.url || '/', `http://${req.headers.host}`);
+  const roomId = url.searchParams.get('room') || 'lobby';
+  (ws as any).roomId = roomId;
+
+  // Получаем (или создаём) карту игроков для комнаты
+  let players = rooms.get(roomId);
+  if (!players) {
+    players = new Map();
+    rooms.set(roomId, players);
+  }
+
   const id = randomUUID();
   const newPlayer: Player = {
     id,
@@ -55,7 +70,7 @@ wss.on('connection', (ws) => {
     try {
       const msg: ClientMessage = JSON.parse(data.toString());
       if (msg.type === 'update') {
-        const p = players.get(id);
+        const p = players!.get(id);
         if (p) {
           p.x = msg.x;
           p.y = msg.y;
@@ -67,12 +82,17 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    players.delete(id);
+    if (players) {
+      players.delete(id);
+      if (players.size === 0) {
+        rooms.delete(roomId);
+      }
+    }
   });
 });
 
-// Broadcast state 30 times per second
-setInterval(broadcastState, 1000 / 30);
+// Broadcast state 30 times per second, по комнатам
+setInterval(broadcastStates, 1000 / 30);
 
 const PORT = process.env.PORT || 8080;
 httpServer.listen(PORT, () => {

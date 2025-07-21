@@ -1,7 +1,10 @@
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 
-const socket = new WebSocket(`ws://${location.host}`);
+const urlParams = new URLSearchParams(window.location.search);
+const room = urlParams.get('room') || 'lobby';
+const socket = new WebSocket(`ws://${location.host}?room=${encodeURIComponent(room)}`);
+console.log(`Connecting to room: ${room}`);
 
 let playerId = null;
 const players = new Map();
